@@ -7,10 +7,25 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from litellm import completion, acompletion
-from database import init_db, get_db, SessionLocal, Conversation, Message
+from database import init_db, get_db, SessionLocal, Conversation, Message, PromptTemplate
 import uuid
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import json
+
+# 提示詞模板的新增請求格式
+class PromptCreate(BaseModel):
+    title: str
+    content: str
+
+# 提示詞模板的回傳格式
+class PromptResponse(BaseModel):
+    id: int
+    title: str
+    content: str
+
+    class Config:
+        from_attributes = True  # SQLAlchemy v2 寫法 (若是 v1 則是 orm_mode = True)
 
 # 1. 載入 .env 檔案中的環境變數
 load_dotenv()
@@ -78,6 +93,34 @@ class ChatRequest(BaseModel):
     conversation_id: str
 
 # ==========================================
+# 提示詞模板庫 (Prompt Library) API
+# ==========================================
+
+# 1. 取得所有模板
+@app.get("/api/prompts", response_model=list[PromptResponse])
+def get_prompts(db: Session = Depends(get_db)):
+    return db.query(PromptTemplate).all()
+
+# 2. 新增模板
+@app.post("/api/prompts", response_model=PromptResponse)
+def create_prompt(prompt: PromptCreate, db: Session = Depends(get_db)):
+    db_prompt = PromptTemplate(title=prompt.title, content=prompt.content)
+    db.add(db_prompt)
+    db.commit()
+    db.refresh(db_prompt)
+    return db_prompt
+
+# 3. 刪除模板
+@app.delete("/api/prompts/{prompt_id}")
+def delete_prompt(prompt_id: int, db: Session = Depends(get_db)):
+    db_prompt = db.query(PromptTemplate).filter(PromptTemplate.id == prompt_id).first()
+    if db_prompt:
+        db.delete(db_prompt)
+        db.commit()
+        return {"message": "模板已刪除"}
+    return {"error": "找不到該模板"}
+
+# ==========================================
 # 核心聊天 API (升級版：具備記憶寫入功能)
 # ==========================================
 @app.post("/api/chat")
@@ -85,10 +128,16 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     
     # 1. 取得使用者最新輸入的那句話，並存入資料庫
     user_msg_content = request.messages[-1]["content"]
+    # 【新增防呆處理】：如果 content 是陣列 (包含圖片)，就轉成 JSON 字串存入資料庫
+    if isinstance(user_msg_content, list):
+        db_content = json.dumps(user_msg_content, ensure_ascii=False)
+    else:
+        db_content = user_msg_content
+
     db_user_msg = Message(
         conversation_id=request.conversation_id,
         role="user",
-        content=user_msg_content
+        content=db_content  # 使用處理過後的 db_content
     )
     db.add(db_user_msg)
     db.commit()

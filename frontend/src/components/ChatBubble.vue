@@ -17,15 +17,60 @@ const props = defineProps({
   msg: { type: Object, required: true }
 });
 
-// 新增 'show-toast' 事件，用來呼叫 App.vue 的提示框
 const emit = defineEmits(['copy-text', 'show-toast']);
 
-// 1. 攔截 Markdown 渲染結果，偷偷塞入複製按鈕的 HTML
+// ==========================================
+// 【新增】解析使用者訊息 (處理 JSON 與多模態陣列)
+// ==========================================
+const parsedUserContent = computed(() => {
+  if (props.msg.role !== 'user') return { text: '', images: [], files: [] };
+
+  let content = props.msg.content;
+
+  // 1. 如果是從資料庫撈出來的 JSON 字串，先轉回物件/陣列
+  if (typeof content === 'string') {
+    try {
+      if (content.trim().startsWith('[')) {
+        content = JSON.parse(content);
+      }
+    } catch (e) {
+      // 解析失敗代表它是普通純文字，不需處理
+    }
+  }
+
+  let text = '';
+  let images = [];
+  let files = []; 
+
+  // 2. 如果是陣列 (多模態格式)，分類取出文字、圖片與文件
+  if (Array.isArray(content)) {
+    content.forEach(item => {
+      if (item.type === 'text') {
+        text += item.text + '\n';
+      } else if (item.type === 'image_url') {
+        const url = item.image_url.url;
+        if (url.startsWith('data:image/')) {
+          images.push(url); // 收集圖片 Base64
+        } else if (url.startsWith('data:application/pdf')) {
+          files.push('📄 PDF 文件'); // 收集 PDF 標籤
+        }
+      }
+    });
+  } else {
+    // 3. 純文字
+    text = content;
+  }
+
+  return { text: text.trim(), images, files };
+});
+
+// ==========================================
+// 保留原有的 AI Markdown 渲染與複製功能
+// ==========================================
 const renderedHtml = computed(() => {
-  if (!props.msg.content) return '';
+  if (!props.msg.content || props.msg.role !== 'assistant') return '';
   let html = marked.parse(props.msg.content);
   
-  // 使用正則表達式，把每個程式碼區塊包裝起來，並加上絕對定位的按鈕
   html = html.replace(
     /<pre><code/g, 
     '<div class="code-block-wrapper relative group my-4"><button class="copy-code-btn absolute top-2 right-2 bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 hover:text-white px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-all z-10">複製代碼</button><pre><code'
@@ -35,25 +80,19 @@ const renderedHtml = computed(() => {
   return html;
 });
 
-// 2. 事件委派：監聽整個 Markdown 區塊的點擊
 const handleMarkdownClick = async (event) => {
-  // 檢查被點擊的元素是不是我們剛剛塞進去的 'copy-code-btn'
   if (event.target.classList.contains('copy-code-btn')) {
     const btn = event.target;
-    // 往上找到 wrapper，再往下找到 code 裡面的純文字
     const codeBlock = btn.closest('.code-block-wrapper').querySelector('code');
     
     if (codeBlock) {
       try {
         await navigator.clipboard.writeText(codeBlock.textContent);
-        
-        // 視覺回饋：把按鈕變成綠色打勾
         const originalText = btn.innerText;
         btn.innerText = '✅ 已複製';
         btn.classList.replace('bg-gray-700', 'bg-green-600');
         btn.classList.replace('text-gray-300', 'text-white');
         
-        // 2秒後恢復原狀
         setTimeout(() => { 
           btn.innerText = originalText;
           btn.classList.replace('bg-green-600', 'bg-gray-700');
@@ -80,7 +119,23 @@ const handleCopyMessage = (text) => {
       <div class="rounded-2xl p-5 shadow-sm" 
            :class="msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-white border border-gray-100 text-gray-800 rounded-tl-sm'">
         
-        <p v-if="msg.role === 'user'" class="whitespace-pre-wrap leading-relaxed">{{ msg.content }}</p>
+        <div v-if="msg.role === 'user'" class="flex flex-col gap-3">
+          
+          <div v-if="parsedUserContent.images.length > 0" class="flex flex-wrap gap-2">
+            <img v-for="(img, idx) in parsedUserContent.images" :key="idx" 
+                 :src="img" 
+                 class="max-w-full h-auto max-h-48 rounded-lg object-cover border border-white/20 shadow-sm" />
+          </div>
+          
+          <div v-if="parsedUserContent.files.length > 0" class="flex flex-wrap gap-2">
+            <span v-for="(file, idx) in parsedUserContent.files" :key="idx"
+                  class="bg-indigo-500 text-indigo-100 text-xs px-2 py-1 rounded border border-indigo-400 font-medium tracking-wide">
+              {{ file }}
+            </span>
+          </div>
+
+          <p v-if="parsedUserContent.text" class="whitespace-pre-wrap leading-relaxed">{{ parsedUserContent.text }}</p>
+        </div>
         
         <div v-else 
              @click="handleMarkdownClick"
@@ -98,21 +153,20 @@ const handleCopyMessage = (text) => {
 </template>
 
 <style scoped>
-/* 1. 取消 Tailwind Typography 預設幫 code 前後加的討厭引號 */
+/* 你的樣式完美保留 */
 :deep(.prose :not(pre) > code::before),
 :deep(.prose :not(pre) > code::after) {
   content: none !important;
 }
 
-/* 2. 針對「非區塊」的行內程式碼 (單反引號) 進行獨立樣式設定 */
 :deep(.prose :not(pre) > code) {
-  background-color: #f1f5f9; /* 淺灰藍色背景 (slate-100) */
-  color: #e11d48;            /* 專業的代碼深粉紅色 (rose-600) */
-  padding: 0.15rem 0.35rem;  /* 上下左右留白 */
-  border-radius: 0.375rem;   /* 圓角 */
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; /* 等寬字體 */
-  font-size: 0.875em;        /* 字體稍微縮小一點點會更精緻 */
+  background-color: #f1f5f9; 
+  color: #e11d48;            
+  padding: 0.15rem 0.35rem;  
+  border-radius: 0.375rem;   
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; 
+  font-size: 0.875em;        
   font-weight: 500;
-  border: 1px solid #e2e8f0; /* 加一圈極細的邊框提升立體感 */
+  border: 1px solid #e2e8f0; 
 }
 </style>

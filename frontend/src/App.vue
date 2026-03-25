@@ -3,8 +3,14 @@ import { ref, watch, nextTick, computed, onMounted } from 'vue';
 import ChatBubble from './components/ChatBubble.vue';
 import ChatInput from './components/ChatInput.vue';
 
+const availableModels = ref([
+  { id: 'gemini/gemini-2.5-flash', name: 'Gemini 2.5 Flash', supportsImage: true, supportsPdf: true },
+  { id: 'openai/gpt-5-chat-latest', name: 'OpenAI GPT-5-chat', supportsImage: false, supportsPdf: false },
+  { id: 'groq/llama-3.1-8b-instant', name: 'Groq Llama-3.1 8B', supportsImage: false, supportsPdf: false }
+]);
+
 // === 1. 定義狀態 (State) ===
-const model = ref('gemini/gemini-2.5-flash');
+const model = ref(availableModels.value[0].id);
 const temperature = ref(0.7);
 const messages = ref([]);
 const isGenerating = ref(false);
@@ -23,6 +29,15 @@ const promptTemplates = [
   { name: '精準翻譯官', prompt: '你是一位專業翻譯。請將我輸入的內容翻譯成流暢、通順的繁體中文，無需額外解釋。' }
 ];
 const systemPrompt = ref(promptTemplates[0].prompt);
+
+const currentModelSupportsImage = computed(() => {
+  const current = availableModels.value.find(m => m.id === model.value);
+  return current ? current.supportsImage : false;
+});
+const currentModelSupportsPdf = computed(() => {
+  const current = availableModels.value.find(m => m.id === model.value);
+  return current ? current.supportsPdf : false;
+});
 
 // 取得所有歷史對話列表
 const fetchConversations = async () => {
@@ -112,24 +127,49 @@ const copyMessage = async (text) => {
 };
 
 // 發送訊息與接收串流
-const sendMessage = async (text) => {
+const sendMessage = async (payload) => {
   // 防呆：如果正在生成中就阻擋
   if (isGenerating.value) return;
 
-  // 使用子組件傳上來的 text
-  messages.value.push({ role: 'user', content: text });
+  // 1. 處理傳上來的 payload (判斷是純文字，還是包含圖片的陣列)
+  let messageContent = payload.text; // 預設為純文字
+
+  if (payload.files && payload.files.length > 0) {
+    messageContent = []; // 有附件的話，轉成陣列格式 (Vision 模型要求的格式)
+    
+    // 如果有打字，先放入文字區塊
+    if (payload.text.trim()) {
+      messageContent.push({ type: "text", text: payload.text });
+    }
+    
+    // 將檔案放入圖片區塊
+    payload.files.forEach(file => {
+      // 只要是圖片 或 PDF，都把它包裝起來傳給後端
+      if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+        messageContent.push({
+          type: "image_url", // 目前暫時統一借用 image_url 欄位傳輸 Base64
+          image_url: { url: file.data }
+        });
+      }
+    });
+  }
+
+  // 2. 將處理好的內容推入畫面
+  messages.value.push({ role: 'user', content: messageContent });
   isGenerating.value = true;
 
   messages.value.push({ role: 'assistant', content: '' });
   const currentAssistantIndex = messages.value.length - 1;
 
   try {
+    // 3. 保留你的超棒邏輯：限制最近 6 筆，並加入 System Prompt
     const recentHistory = messages.value.slice(0, -1).slice(-6);
     const apiMessages = [
       { role: 'system', content: systemPrompt.value },
       ...recentHistory
     ];
 
+    // 4. 呼叫後端 API
     const response = await fetch('http://127.0.0.1:8000/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,6 +181,7 @@ const sendMessage = async (text) => {
       })
     });
 
+    // 處理串流
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
 
@@ -150,10 +191,13 @@ const sendMessage = async (text) => {
       
       const chunkText = decoder.decode(value, { stream: true });
       messages.value[currentAssistantIndex].content += chunkText;
+      
+      // 保留你的漂亮捲動邏輯
       scrollToBottom();
     }
 
   } catch (error) {
+    console.error('API Error:', error);
     messages.value[currentAssistantIndex].content += '\n\n**[系統提示]**：發生錯誤，請檢查後端連線。';
   } finally {
     isGenerating.value = false;
@@ -231,7 +275,10 @@ const sendMessage = async (text) => {
       <ChatInput 
         class="shrink-0"
         :isGenerating="isGenerating" 
+        :supports-image="currentModelSupportsImage"
+        :supports-pdf="currentModelSupportsPdf"
         @send="sendMessage" 
+        @show-toast="showToast"
       />
     </div>
 
@@ -245,11 +292,16 @@ const sendMessage = async (text) => {
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-2">模型 (Model)</label>
           <select v-model="model" class="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-gray-50">
-            <option value="gemini/gemini-2.5-flash">Gemini 2.5 Flash</option>
-            <option value="openai/gpt-5-chat-latest">OpenAI GPT-5-chat</option>
-            <option value="groq/llama-3.1-8b-instant">Groq Llama-3.1 8B</option>
+            <option v-for="m in availableModels" :key="m.id" :value="m.id">
+              {{ m.name }} 
+              {{ (m.supportsImage || m.supportsPdf) ? '📎' : '📝' }}
+            </option>
           </select>
+          <p class="text-xs text-gray-500 mt-2">
+            📎 支援圖片或檔案上傳 | 📝 僅支援純文字
+          </p>
         </div>
+        
 
         <div class="p-4 bg-gray-50 rounded-lg border border-gray-100">
           <div class="flex justify-between mb-2">

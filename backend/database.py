@@ -43,6 +43,14 @@ class Message(Base):
     # 建立關聯：這條訊息屬於哪個對話
     conversation = relationship("Conversation", back_populates="messages")
 
+class PromptTemplate(Base):
+    __tablename__ = "prompt_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)      # 模板標題 (例如: "繁體中文工程師")
+    content = Column(Text)                  # 模板內容 (用 Text 比較好，因為提示詞可能會很長)
+    created_at = Column(DateTime, default=datetime.utcnow) # 順便加上建立時間，保持一致性
+
 # ==========================================
 # 初始化資料庫函數
 # ==========================================
