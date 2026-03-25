@@ -1,0 +1,16 @@
+# Python 忽略項目
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.db
+
+# 環境變數金鑰
+.env
+
+# 前端忽略項目
+frontend/node_modules/
+frontend/dist/
+
+# OS 系統產生檔案
+.DS_Store
+Thumbs.db
