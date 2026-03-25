@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import json
+import litellm
 
 # 提示詞模板的新增請求格式
 class PromptCreate(BaseModel):
@@ -82,8 +83,44 @@ def get_conversation_history(conv_id: str, db: Session = Depends(get_db)):
     return {
         "id": conv.id,
         "title": conv.title,
-        "messages": [{"role": m.role, "content": m.content} for m in messages]
+        "messages": [
+            {
+                "role": m.role, 
+                "content": m.content,
+                "prompt_tokens": m.prompt_tokens,
+                "completion_tokens": m.completion_tokens,
+                "total_tokens": m.total_tokens, 
+                "cost": m.cost
+            } for m in messages
+        ]
     }
+
+# 4. 刪除對話
+@app.delete("/api/conversations/{conv_id}")
+def delete_conversation(conv_id: str, db: Session = Depends(get_db)):
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="找不到此對話")
+    
+    # 因為我們在 database.py 有設定 cascade="all, delete-orphan"，
+    # 刪除 Conversation 時，底下的 Message 會自動被刪除。
+    db.delete(conv)
+    db.commit()
+    return {"status": "success", "message": "對話已刪除"}
+
+# 5. 手動修改對話標題
+class TitleUpdate(BaseModel):
+    title: str
+
+@app.patch("/api/conversations/{conv_id}")
+def update_conversation_title(conv_id: str, payload: TitleUpdate, db: Session = Depends(get_db)):
+    conv = db.query(Conversation).filter(Conversation.id == conv_id).first()
+    if not conv:
+        raise HTTPException(status_code=404, detail="找不到此對話")
+    
+    conv.title = payload.title
+    db.commit()
+    return {"status": "success", "new_title": conv.title}
 
 # 4. 定義前端傳過來的資料格式
 class ChatRequest(BaseModel):
@@ -169,16 +206,61 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
             yield "\n[伺服器錯誤：無法產生回應]"
             
         finally:
-            # 3. 串流結束後，把 AI 完整的回覆存進資料庫
-            # 因為這是在 async generator 裡面，最好開一個獨立的 Session
+            # 3. 串流結束後，計算 Token 與成本，並將 AI 完整的回覆存進資料庫
             with SessionLocal() as session:
+                p_tokens = 0
+                c_tokens = 0
+                est_cost = 0.0
+                
+                try:
+                    p_tokens = litellm.token_counter(model=request.model, messages=request.messages)
+                    c_tokens = litellm.token_counter(model=request.model, text=ai_full_response)
+                    cost_tuple = litellm.cost_per_token(model=request.model, prompt_tokens=p_tokens, completion_tokens=c_tokens)
+                    est_cost = sum(cost_tuple)
+                except Exception as e:
+                    print(f"Token 計算錯誤 (可忽略): {e}")
+
                 db_ai_msg = Message(
                     conversation_id=request.conversation_id,
                     role="assistant",
-                    content=ai_full_response
+                    content=ai_full_response,
+                    prompt_tokens=p_tokens,
+                    completion_tokens=c_tokens,
+                    total_tokens=p_tokens + c_tokens,
+                    cost=est_cost
                 )
                 session.add(db_ai_msg)
                 session.commit()
+
+                # ✨ 【新增】Gemini 式自動命名邏輯 ✨
+                # 檢查這是否為該對話的第一輪 (資料庫現在應該剛好有 2 則訊息)
+                msg_count = session.query(Message).filter(Message.conversation_id == request.conversation_id).count()
+                
+                if msg_count == 2:
+                    try:
+                        # 叫 AI 用極短的文字總結這場對話
+                        # 我們使用同步的 completion 即可，因為這是在背景快速完成
+                        title_prompt = [
+                            {"role": "system", "content": "你是一個標題產生器。請根據使用者的提問，給出一個 5 個字以內的簡短標題，不要有標點符號，不要有廢話。"},
+                            {"role": "user", "content": f"請幫這段提問取標題：{user_msg_content[:50]}"} # 取前50字避開過長輸入
+                        ]
+                        
+                        title_res = litellm.completion(
+                            model=request.model, # 使用同一個模型或指定較便宜的模型
+                            messages=title_prompt,
+                            max_tokens=15,
+                            temperature=0.3
+                        )
+                        
+                        new_title = title_res.choices[0].message.content.strip().replace("「", "").replace("」", "")
+                        
+                        # 更新對話標題
+                        session.query(Conversation).filter(Conversation.id == request.conversation_id).update({"title": new_title})
+                        session.commit()
+                        print(f"成功自動命名: {new_title}")
+                        
+                    except Exception as e:
+                        print(f"自動命名失敗: {e}")
 
     # 回傳 StreamingResponse，傳入我們寫好的 async generator
     return StreamingResponse(generate(), media_type="text/event-stream")

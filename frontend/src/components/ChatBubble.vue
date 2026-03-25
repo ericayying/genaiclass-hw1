@@ -120,11 +120,10 @@ const handleCopyMessage = (text) => {
            :class="msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-sm' : 'bg-white border border-gray-100 text-gray-800 rounded-tl-sm'">
         
         <div v-if="msg.role === 'user'" class="flex flex-col gap-3">
-          
           <div v-if="parsedUserContent.images.length > 0" class="flex flex-wrap gap-2">
             <img v-for="(img, idx) in parsedUserContent.images" :key="idx" 
-                 :src="img" 
-                 class="max-w-full h-auto max-h-48 rounded-lg object-cover border border-white/20 shadow-sm" />
+                :src="img" 
+                class="max-w-full h-auto max-h-48 rounded-lg object-cover border border-white/20 shadow-sm" />
           </div>
           
           <div v-if="parsedUserContent.files.length > 0" class="flex flex-wrap gap-2">
@@ -137,10 +136,33 @@ const handleCopyMessage = (text) => {
           <p v-if="parsedUserContent.text" class="whitespace-pre-wrap leading-relaxed">{{ parsedUserContent.text }}</p>
         </div>
         
+        
         <div v-else 
              @click="handleMarkdownClick"
              class="prose prose-sm md:prose-base prose-indigo max-w-none prose-pre:bg-[#0d1117] prose-pre:m-0 prose-pre:p-4"
              v-html="renderedHtml">
+        </div>
+
+        <div v-if="msg.role === 'assistant' && msg.total_tokens" 
+            class="mt-4 border-t border-gray-100 pt-3 flex flex-col gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+          
+          <div class="flex justify-end items-center gap-2 text-[10px] font-mono text-gray-400">
+            <span class="bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+              📥 In: {{ msg.prompt_tokens }}
+            </span>
+            <span class="bg-gray-50 px-2 py-0.5 rounded border border-gray-100">
+              📤 Out: {{ msg.total_tokens - msg.prompt_tokens }}
+            </span>
+          </div>
+
+          <div class="flex justify-end items-center gap-2 text-[11px] font-mono">
+            <span class="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100 font-bold">
+              ⚡ Total: {{ msg.total_tokens }}
+            </span>
+            <span v-if="msg.cost > 0" class="bg-green-50 text-green-600 px-2 py-0.5 rounded-full border border-green-100 font-bold">
+              💰 ${{ msg.cost.toFixed(5) }}
+            </span>
+          </div>
         </div>
       </div>
 

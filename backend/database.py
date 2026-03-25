@@ -1,5 +1,5 @@
 # 後端路徑：database.py
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime
 
@@ -39,6 +39,11 @@ class Message(Base):
     role = Column(String) # 'user', 'assistant', 'system'
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    prompt_tokens = Column(Integer, default=0)       # 提問消耗的 Token
+    completion_tokens = Column(Integer, default=0)   # 回答消耗的 Token
+    total_tokens = Column(Integer, default=0)        # 總共消耗的 Token
+    cost = Column(Float, default=0.0)                # 預估成本 (美金 USD)
 
     # 建立關聯：這條訊息屬於哪個對話
     conversation = relationship("Conversation", back_populates="messages")

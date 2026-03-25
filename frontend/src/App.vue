@@ -21,6 +21,8 @@ const chatContainer = ref(null);    // 用於自動捲動的參考點
 const isLeftPanelOpen = ref(true); // 控制左側選單開關
 const conversations = ref([]);     // 存放歷史對話列表
 const currentConversationId = ref(null); // 目前正在看的對話 ID
+const editingId = ref(null); // 紀錄目前正在編輯哪一個標題
+const tempTitle = ref('');   // 編輯時的暫存文字
 
 // 提示詞模板功能
 const promptTemplates = [
@@ -195,6 +197,7 @@ const sendMessage = async (payload) => {
       // 保留你的漂亮捲動邏輯
       scrollToBottom();
     }
+    await loadConversation(currentConversationId.value);
 
   } catch (error) {
     console.error('API Error:', error);
@@ -202,6 +205,62 @@ const sendMessage = async (payload) => {
   } finally {
     isGenerating.value = false;
   }
+};
+// 刪除對話
+const deleteConversation = async (id, event) => {
+  event.stopPropagation(); // 防止觸發 loadConversation
+  if (!confirm('確定要刪除這段對話嗎？')) return;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/api/conversations/${id}`, {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      showToast('🗑️ 對話已刪除');
+      await fetchConversations();
+      // 如果刪除的是當前對話，自動切換到第一筆或建立新對話
+      if (currentConversationId.value === id) {
+        if (conversations.value.length > 0) {
+          loadConversation(conversations.value[0].id);
+        } else {
+          createNewChat();
+        }
+      }
+    }
+  } catch (error) {
+    showToast('❌ 刪除失敗');
+  }
+};
+
+// 開始編輯標題
+const startEdit = (conv, event) => {
+  event.stopPropagation();
+  editingId.value = conv.id;
+  tempTitle.value = conv.title;
+};
+
+// 儲存新標題
+const saveTitle = async (id) => {
+  if (!tempTitle.value.trim()) return (editingId.value = null);
+
+  try {
+    const res = await fetch(`http://127.0.0.1:8000/api/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: tempTitle.value })
+    });
+    if (res.ok) {
+      editingId.value = null;
+      await fetchConversations(); // 刷新列表
+      showToast('✅ 標題已更新');
+    }
+  } catch (error) {
+    showToast('❌ 更新失敗');
+  }
+};
+// 自定義指令：自動聚焦
+const vFocus = {
+  mounted: (el) => el.focus()
 };
 </script>
 
@@ -228,12 +287,33 @@ const sendMessage = async (payload) => {
         <div class="text-xs font-semibold text-gray-500 mb-2 px-1 uppercase tracking-wider">歷史紀錄</div>
 
         <div class="flex-1 overflow-y-auto space-y-1 pr-1">
-          <button v-for="conv in conversations" :key="conv.id"
-                  @click="loadConversation(conv.id)"
-                  :class="conv.id === currentConversationId ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-gray-800 hover:text-white'"
-                  class="w-full text-left px-3 py-2.5 rounded-md text-sm truncate transition-colors">
-            {{ conv.title }}
-          </button>
+          <div v-for="conv in conversations" :key="conv.id" class="group relative">
+            
+            <div v-if="editingId !== conv.id"
+                @click="loadConversation(conv.id)"
+                :class="conv.id === currentConversationId ? 'bg-indigo-600 text-white shadow-md' : 'hover:bg-gray-800 hover:text-white'"
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded-md text-sm cursor-pointer transition-all">
+              
+              <span class="truncate pr-8">{{ conv.title }}</span>
+
+              <div class="absolute right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button @click="startEdit(conv, $event)" class="p-1 hover:text-indigo-300" title="編輯標題">
+                  ✏️
+                </button>
+                <button @click="deleteConversation(conv.id, $event)" class="p-1 hover:text-red-400" title="刪除對話">
+                  🗑️
+                </button>
+              </div>
+            </div>
+
+            <div v-else class="px-2 py-1 bg-gray-800 rounded-md flex items-center gap-1">
+              <input v-model="tempTitle" 
+                    @keyup.enter="saveTitle(conv.id)" 
+                    @blur="saveTitle(conv.id)"
+                    v-focus
+                    class="bg-gray-700 text-white text-xs w-full px-2 py-1 rounded border border-indigo-500 outline-none" />
+            </div>
+          </div>
         </div>
       </div>
     </div>
