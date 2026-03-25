@@ -197,6 +197,7 @@ const sendMessage = async (payload) => {
       // 保留你的漂亮捲動邏輯
       scrollToBottom();
     }
+    await fetchConversations();
     await loadConversation(currentConversationId.value);
 
   } catch (error) {

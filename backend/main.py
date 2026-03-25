@@ -237,30 +237,40 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 msg_count = session.query(Message).filter(Message.conversation_id == request.conversation_id).count()
                 
                 if msg_count == 2:
+                    print(f"DEBUG: 觸發自動命名，目前 ID: {request.conversation_id}")
                     try:
-                        # 叫 AI 用極短的文字總結這場對話
-                        # 我們使用同步的 completion 即可，因為這是在背景快速完成
                         title_prompt = [
-                            {"role": "system", "content": "你是一個標題產生器。請根據使用者的提問，給出一個 5 個字以內的簡短標題，不要有標點符號，不要有廢話。"},
-                            {"role": "user", "content": f"請幫這段提問取標題：{user_msg_content[:50]}"} # 取前50字避開過長輸入
+                            {"role": "system", "content": "你是一個標題產生器。請根據使用者的提問，給出一個 8 個字以內的簡短標題，不要有標點符號，不要有廢話。"},
+                            {"role": "user", "content": f"請幫這段提問取標題：{str(user_msg_content)[:50]}"}
                         ]
                         
                         title_res = litellm.completion(
-                            model=request.model, # 使用同一個模型或指定較便宜的模型
+                            model="gemini/gemini-2.5-flash",
                             messages=title_prompt,
                             max_tokens=15,
                             temperature=0.3
                         )
                         
-                        new_title = title_res.choices[0].message.content.strip().replace("「", "").replace("」", "")
-                        
+                        raw_content = title_res.choices[0].message.content
+
+                        # 判定是否有抓到標題內容
+                        if raw_content:
+                            new_title = raw_content.strip().replace("「", "").replace("」", "")
+                        else:
+                            new_title = "新對話"
+
+                        # 如果處理完變成空字串，也給個預設值
+                        if not new_title:
+                            new_title = "新對話"
+                            
                         # 更新對話標題
                         session.query(Conversation).filter(Conversation.id == request.conversation_id).update({"title": new_title})
                         session.commit()
                         print(f"成功自動命名: {new_title}")
                         
                     except Exception as e:
-                        print(f"自動命名失敗: {e}")
+                        # 這裡的 print 會讓你在終端機看到報錯，但不會讓後端掛掉
+                        print(f"自動命名失敗 (已跳過): {e}")
 
     # 回傳 StreamingResponse，傳入我們寫好的 async generator
     return StreamingResponse(generate(), media_type="text/event-stream")
